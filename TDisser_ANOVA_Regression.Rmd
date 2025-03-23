@@ -1,0 +1,257 @@
+---
+title: "TDisser_FinalPart2"
+output: html_document
+date: "2025-03-17"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part 2:
+
+**Tara Disser**
+
+**March 20th, 2025**
+
+**Prerequisites**
+
+```{r echo=TRUE, eval=FALSE}
+library(tidyverse) # data wrangling and ggplot
+library(terra) # for spatial data!
+library(tidyterra) # mapping vector data w/ ggplot
+library(corrplot) # creating correlation plot
+library(leaflet) # interactive map
+library(maps) # interactive map
+library(RColorBrewer) # color palattes
+```
+
+```{r echo=TRUE, eval=FALSE}
+
+plots_sf <- vect("Data/TreeInventory_Oregon.shp")
+plot(plots_sf)
+mtext("Oregon Tree Inventory Plots", side = 3, line = 2, font = 2, cex = 1.2)
+
+```
+
+This Oregon Tree Inventory dataset contains one observation per plot along with data on the plot number, the year that plot was sampled, the mean biomass (weight) of the trees per acre, the mean diameter and height of the trees in that plot, the mean elevation of the plot, the number of trees in each plot, and whether or not that plot was burned.
+
+I will be running ANOVA and regression on different variables to see if we can find some relationships in the data. I will begin by inspecting the data, then asserting the null and alternative hypothesis I am testing at the start of each analysis.
+
+Let's first inspect the relationships in the data:
+
+```{r echo=TRUE, eval=FALSE}
+
+coords <- crds(plots_sf)
+plots_df <- as.data.frame(plots_sf) %>%
+  mutate(LONG = coords[,1], LAT = coords[,2]) %>% # Data manipulation 1 - making sure we don't lose coordinate data when we make this into a data frame
+  na.omit() # Dropping NA values
+
+pairs(plots_df[1:9], main = "Oregon Tree Inventory Variable Relationships")
+#this will take a while to run & plot... if it doesn't show up completely the first time, run again
+
+```
+
+That's a lot of variables, and not all of them really have a relationship that we care about (e.g. elevation isn't really determined by plot number.) Let's plot only the relevant variables:
+
+```{r echo=TRUE, eval=FALSE}
+
+pairs(plots_df[c(4, 5, 7, 8, 9)], main = "Oregon Tree Inventory Relevant Variable Relationships")
+
+```
+
+We can see at least one outlier in our pairs plot -- it is especially noticeable when we look at the height plots: most of our values are bunched around 8 because the scale extends to a value of 8000, and only one point lies there. We can also see the same issue happening in the diameter plots. Let's remove those points.
+
+```{r echo=TRUE, eval=FALSE}
+
+plots_filtered <- plots_df %>%
+  filter(HEIGHT < 7000, DIAMETER < 120) # Data manipulation 2 - filtering outliers
+
+pairs(plots_filtered[c(4, 5, 7, 8, 9)], main = "Oregon Tree Inventory Relevant Variable Relationships, Outliers Excluded")
+
+```
+
+That looks much better!
+
+For simplicity, let's specify the variables we care about so we don't keep having to select that subset:
+
+```{r}
+
+plots_rel_vars_fil <- plots_filtered %>%
+  select(c(4, 5, 7, 8, 9)) # Data manipulation 3 - selecting only the relevant variables columns (not including things like year or observation number...)
+
+```
+
+We can kind of see some trends in these graphs, but since there are so many data points and they're all bunched together, any inferences we make from the plot may be skewed. Let's make a correlation plot to see the relationships a bit more clearly
+
+```{r echo=TRUE, eval=FALSE}
+
+plots_cor <- cor(plots_rel_vars_fil, use = "complete.obs") # use argument drops rows with NA values
+corrplot(plots_cor, method = "ellipse")
+mtext("Oregon Tree Inventory Relevant Variables Correlation Plot", side = 2, line = 2, font = 2, cex = 1.2)
+
+```
+
+We can see some strong positive associations between diameter and height, diameter and biomass, height and biomass - this all makes sense, because we would expect that as the mean weight/height/diameter of the trees increases, the others would increase as well.
+
+**ANOVA:**
+
+Now that we have some understanding of the numerical data, let's see how it looks in relation to a categorical variable (our BURNED variable showing burned and unburned plots) by first pivoting our data and then creating some boxplots faceted by numerical variable:
+
+```{r echo=TRUE, eval=FALSE}
+
+variable_labels <- c("BIO_AG_ACR" = "Mean Biomass (lbs/acre)", 
+                     "DIAMETER" = "Mean Diameter (in)", 
+                     "ELEV" = "Mean Elevation of Plot (m)",
+                     "HEIGHT" = "Mean Height (ft)",
+                     "NUMBER" = "# of Trees in Plot")
+    # nice variable labels for the plot!
+
+plots_long <- plots_filtered %>%
+  pivot_longer(cols = c(BIO_AG_ACR, NUMBER, DIAMETER, HEIGHT, ELEV), 
+               names_to = "Variable", values_to = "Value")
+    #Data manipulation 4 - pivoting to create the following boxplot:
+
+ggplot(data = plots_long, aes(x = factor(BURNED), y = Value)) +
+  geom_boxplot(na.rm = TRUE) + # Removing NA values so we don't get a warning
+  facet_wrap(~ Variable, 
+             scales = "free_y", # Creates separate plots per dependent variable
+             labeller = as_labeller(variable_labels)) +  
+  scale_x_discrete(labels = c("0" = "NO", "1" = "YES")) +
+  labs(x = "Burned?", title = "Plot stats by whether a plot was burned or not") +
+  theme_bw()
+
+```
+
+Based on the boxplot graph, it's hard to see much difference in the distribution of any of our numerical variables based on whether a plot was burned or not, besides some slight differences in the range of values. Looks like the greatest difference is in the Mean Elevation, so let's run ANOVA to see what we can determine in terms of the following null and alternative hypotheses:
+
+H0: There is NO association between the mean elevation of a plot and whether or not it was burned 
+
+H1: There IS an association between the mean elevation of a plot and whether or not it was burned
+
+```{r echo=TRUE, eval=FALSE}
+
+elev_by_burned_anova <- aov(ELEV ~ BURNED, data = plots_filtered)
+summary(elev_by_burned_anova)
+
+```
+
+In the context of ANOVA, we can interpret the null hypothesis as a lack of variation between elevation of the burned plots and of the not-burned plots. The p-value associated with our F-statistic is very small and is showing a high significance code, which is evidence against the null hypothesis. That tells us that the trend we see is to statistically significant to have occurred randomly, and that we CANNOT assert that there is no association between the elevation of a plot and whether or not it was burned.
+
+**REGRESSION:**
+
+In the following section, I will find a relationship worthy of inspecting, create a linear model and analyze that model, then plot residuals from the model to see if there may be a spatial factor impacting that relationship.
+
+Since the dataset is really big, let's start by just inspecting observations from 2019.
+
+```{r}
+
+plots_sf_2019 <- plots_sf %>%
+  filter(YEAR == 2019)
+plots_filtered_2019 <- plots_filtered %>%
+  filter(YEAR == 2019)
+plots_rel_vars_fil_2019 <- plots_filtered_2019 %>%
+  select(c(4, 5, 7, 8, 9))
+
+```
+
+Looking at our correlation plot, we still see a few somewhat expected relationships as mentioned previously (all relating to size):
+
+```{r echo=TRUE, eval=FALSE}
+
+plots_cor_2019 <- cor(plots_rel_vars_fil_2019, use = "complete.obs")
+corrplot(plots_cor_2019, method = "ellipse")
+mtext("Oregon Tree Inventory 2019 Variables Correlation Plot", side = 2, line = 2, font = 2, cex = 1.2)
+
+```
+
+We can also see a "medium" strength negative correlation between mean height and elevation. Let's inspect that further using a linear regression model with elevation as our predictor variable and height as our response and the following hypotheses:
+
+H0: There is NO association between the mean elevation of a plot and mean height of the trees 
+
+H1: There IS an association between the mean elevation of a plot and mean height of the trees
+
+```{r echo=TRUE, eval=FALSE}
+
+regress_2019 <- lm(HEIGHT ~ ELEV, data = plots_filtered_2019)
+summary(regress_2019)
+
+```
+
+We got a very small p-value which, again, is strong evidence against the null hypothesis. That being said, our adjusted R^2 value is 0.136, meaning that only 13.6% of the variation in our response variable can be explained by the predictor variable; i.e. the model fit isn't great.
+
+Let's map the residuals from a few different years to see if we notice any spatial patterns:
+
+```{r echo=TRUE, eval=FALSE}
+
+oregon_map <- map_data("state") %>% 
+  subset(region == "oregon") # Getting Oregon outline for map
+
+ggplot() +
+  geom_polygon(data = oregon_map, 
+               aes(x = long, y = lat, group = group),
+               fill = NA, 
+               color = "black") + # Oregon outline
+  geom_spatvector(data = plots_sf_2019) + 
+  geom_point(data = plots_filtered_2019, 
+             aes(x = LONG, y = LAT, color = regress_2019$residuals)) + # Coloring by residual values
+  scale_color_distiller(type = "div",
+                        palette = "RdBu",
+                        aesthetics = "color", 
+                        name = "Residuals") +
+  labs(x = "Longitude", 
+       y = "Latitude", 
+       title = "2019 Oregon Tree Plots:\nMean Height of Tree vs. Mean Elevation of Plot Residuals")
+
+```
+
+Looking at this map, we do see some a bit of clustering of positive residuals on the left side, which may mean that there are some spatial variables we are not accounting for in this model.
+
+Let's return to our original data set and see if the model/relationship looks better when we inspect all observations.
+
+```{r echo=TRUE, eval=FALSE}
+
+regress_all <- lm(HEIGHT ~ ELEV, data = plots_filtered)
+summary(regress_all)
+
+```
+
+We still get a very small p-value, but unfortunately our model fit is even a bit worse: our adjusted R\^2 value is now 0.1116 meaning that only about 11% of the variation in our response variable (mean height) can be explained by mean elevation.
+
+Let's go ahead an map the residuals again, but this time since we're using the full dataset, we'll make a dynamic map so we can zoom in on different areas. This should eliminate an issue with overlapping points:
+
+```{r}
+
+pal <- colorNumeric(palette = "RdBu", domain = regress_all$residuals) # Color palatte to color residuals
+
+mapStates = map("state", fill = TRUE, plot = FALSE) # Base map
+
+leaflet(data = mapStates) %>%
+  addPolygons(lng = mapStates$x, lat = mapStates$y, 
+              fillColor = "gray", fillOpacity = 0.7, 
+              color = "black", weight = 1) %>%
+  addTiles() %>% # Drawing basemap
+  addCircleMarkers( # Drawing points based on coordinates taken from the df
+    data = plots_df,
+    lng = ~LONG, lat = ~LAT,
+    color = ~pal(regress_all$residuals),
+    fillOpacity = 0.8, radius = 4, stroke = FALSE # "Formatting" points
+  ) %>%
+  setView(lng = -120.5, lat = 44.0, zoom = 6) %>% # Setting view to Oregon coordinates
+  addLegend("topright", pal = pal, values = regress_all$residuals, # Creating/placing legend
+            title = "Residuals") %>%
+  addControl(
+    html = "<h2 style='color: black; text-align: center; font-family: Arial;'>Figure2:<br>1999-2019 Oregon Tree Plots:<br>Mean Height of Tree vs. Mean Elevation of Plot Residuals</h2>",
+    position = "bottomleft"
+  )
+
+```
+
+Looking at the data from all the years at once, we notice even less clustering than we did before. Positive and negative, extreme and not-extreme residuals seem to be dispersed pretty evenly throughout. This tells us that, at least for all the years combined, there doesn't seem to be any spatial factor contributing to the mean elevation and mean height relationship, though the results may look different if we inspect year by year.
+
+Shortcomings of these analyses: 
+Observations with missing values for one or more variables were dropped from the data set and not accounted for in either analysis.
+
+**END**
